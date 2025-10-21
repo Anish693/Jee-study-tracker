@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manzil Study Tracker</title>
+    <!-- Link to PWA manifest for installability -->
+    <link rel="manifest" href="manifest.json">
+    
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Use Inter font family -->
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f7fafc; }
+        /* Custom scrollbar for better mobile feel */
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 2px; }
+        .custom-scrollbar { scrollbar-width: thin; scrollbar-color: #cbd5e1 #f7fafc; }
+    </style>
+</head>
+<body class="min-h-screen antialiased">
+
+    <div id="app" class="max-w-md mx-auto bg-white shadow-xl min-h-screen">
+
+        <!-- Header -->
+        <header class="sticky top-0 bg-white border-b border-blue-100 z-10">
+            <div class="p-4 flex justify-between items-center">
+                <h1 class="text-2xl font-extrabold text-blue-700 tracking-tight">Manzil Tracker</h1>
+                <div class="text-sm text-gray-500 rounded-full bg-blue-50 px-3 py-1 font-semibold" id="taskCountDisplay">
+                    Loading...
+                </div>
+            </div>
+            
+            <!-- User ID Display (Crucial for Firestore) -->
+            <div class="px-4 pb-2">
+                <p class="text-xs text-gray-400 truncate">
+                    Your User ID: <span id="userIdDisplay" class="font-mono text-gray-600">Authenticating...</span>
+                </p>
+            </div>
+
+            <!-- Filters Section -->
+            <div class="px-4 pb-3 flex space-x-2 overflow-x-auto custom-scrollbar">
+                <!-- Subject Filter Dropdown -->
+                <select id="subjectFilter" onchange="app.applyFilters()" class="px-3 py-1 text-sm bg-gray-100 border border-gray-300 rounded-lg text-gray-700 focus:ring-blue-500 focus:border-blue-500 transition duration-150 ease-in-out">
+                    <option value="">All Subjects</option>
+                </select>
+
+                <!-- Batch Filter Dropdown -->
+                <select id="batchFilter" onchange="app.applyFilters()" class="px-3 py-1 text-sm bg-gray-100 border border-gray-300 rounded-lg text-gray-700 focus:ring-blue-500 focus:border-blue-500 transition duration-150 ease-in-out">
+                    <option value="">All Batches</option>
+                </select>
+
+                <!-- Status Filter Dropdown -->
+                <select id="statusFilter" onchange="app.applyFilters()" class="px-3 py-1 text-sm bg-gray-100 border border-gray-300 rounded-lg text-gray-700 focus:ring-blue-500 focus:border-blue-500 transition duration-150 ease-in-out">
+                    <option value="">All Statuses</option>
+                    <option value="completed">Completed</option>
+                    <option value="pending">Pending</option>
+                </select>
+            </div>
+        </header>
+
+        <!-- Main Task List -->
+        <main class="p-4 space-y-3">
+            <div id="taskList">
+                <!-- Tasks will be rendered here by JavaScript -->
+            </div>
+            <div id="emptyState" class="hidden text-center py-10 text-gray-500">
+                <svg class="mx-auto h-12 w-12 text-gray-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2-12H7a2 0 00-2 2v10a2 0 002 2h10a2 0 002-2V6a2 0 00-2-2z" />
+                </svg>
+                <h3 class="mt-2 text-sm font-medium text-gray-900">No tasks found</h3>
+                <p class="mt-1 text-sm text-gray-500">
+                    Adjust your filters to see more tasks.
+                </p>
+            </div>
+        </main>
+    </div>
+
+    <script type="module">
+        // Import necessary Firebase modules
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Set Firebase Log Level for debugging
+        setLogLevel('Debug');
+
+        // --- GLOBAL FIREBASE VARIABLES (MANDATORY) ---
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        
+        let db, auth;
+        let userId = null;
+        let isAuthReady = false;
+
+        // --- APP DATA AND STATE ---
+        const app = {
+            // Raw data structured from your PDF
+            allTasks: [
+                { "Day": 1, "Chapter": "Basic Mathematics", "Subject": "Physics", "Duration": "06:37:22", "Faculty": "Rajwant Sir", "Manzil": "Manzil 2025" },
+                { "Day": 2, "Chapter": "Some Basic Concepts (Mole Concept)", "Subject": "Chemistry", "Duration": "08:08:05", "Faculty": "Faisal Sir", "Manzil": "Manzil 2025" },
+                { "Day": 3, "Chapter": "Sets (Basics)", "Subject": "Mathematics", "Duration": "03:25:24", "Faculty": "Tarun Sir", "Manzil": "Manzil 2024" },
+                { "Day": 4, "Chapter": "Kinematics in 1D: Graphs and Motion", "Subject": "Physics", "Duration": "06:49:42", "Faculty": "Rajwant Sir", "Manzil": "Manzil 2025" },
+                { "Day": 5, "Chapter": "Atomic Structure", "Subject": "Chemistry", "Duration": "05:32:52", "Faculty": "Faisal Sir", "Manzil": "Manzil 2025" },
+                { "Day": 6, "Chapter": "Trigonometric Functions and Identities", "Subject": "Mathematics", "Duration": "06:29:16", "Faculty": "Tarun Sir", "Manzil": "Manzil 2024" },
+                { "Day": 7, "Chapter": "Kinematics in 2D: (Motion in a Plane )", "Subject": "Physics", "Duration": "08:07:07", "Faculty": "Rajwant Sir", "Manzil": "Manzil 2025" },
+                { "Day": 8, "Chapter": "Periodic Classification and Periodic Trends", "Subject": "Chemistry", "Duration": "02:58:12", "Faculty": "Om Pandey Sir", "Manzil": "Manzil Legend" },
+                { "Day": 9, "Chapter": "Quadratic Equations and Inequalities", "Subject": "Mathematics", "Duration": "03:19:00", "Faculty": "Tarun Sir", "Manzil": "Manzil 2024" },
+                { "Day": 10, "Chapter": "Laws of Motion & Friction", "Subject": "Physics", "Duration": "09:59:34", "Faculty": "Rajwant Sir", "Manzil": "Manzil 2025" },
+                { "Day": 11, "Chapter": "Chemical Bonding and Molecular Structure", "Subject": "Chemistry", "Duration": "12:13:00", "Faculty": "Faisal Sir", "Manzil": "Manzil 2025" },
+                { "Day": 12, "Chapter": "Principle of Mathematical Induction", "Subject": "Mathematics", "Duration": "00:46:17", "Faculty": "Tarun Sir", "Manzil": "Manzil 2024" },
+                { "Day": 13, "Chapter": "Work, Power and Energy", "Subject": "Physics", "Duration": "08:24:28", "Faculty": "Rajwant Sir", "Manzil": "Manzil 2025" },
+                { "Day": 14, "Chapter": "Redox Reactions", "Subject": "Chemistry", "Duration": "03:25:05", "Faculty": "Vimal Sir", "Manzil": "Manzil Legend" },
+                { "Day": 15, "Chapter": "Complex Numbers", "Subject": "Mathematics", "Duration": "03:27:00", "Faculty": "Tarun Sir", "Manzil": "Manzil 2024" },
+                { "Day": 16, "Chapter": "PART TEST 1 & PART TEST 2- ABOVE CHAPTERS", "Subject": "ALL", "Duration": "", "Faculty": "", "Manzil": "" },
+                { "Day": 17, "Chapter": "Circular Motion", "Subject": "Physics", "Duration": "05:07:53", "Faculty": "Rajwant Sir", "Manzil": "Manzil 2025" },
+                { "Day": 18, "Chapter": "Hydrogen and S-Block Elements", "Subject": "Chemistry", "Duration": "04:58:17", "Faculty": "Om Pandey Sir", "Manzil": "Manzil Legend" },
+                { "Day": 19, "Chapter": "Binomial Theorem", "Subject": "Mathematics", "Duration": "03:55:00", "Faculty": "Tarun Sir", "Manzil": "Manzil 2024" },
+                { "Day": 20, "Chapter": "Center of Mass", "Subject": "Physics", "Duration": "07:13:21", "Faculty": "Rajwant Sir", "Manzil": "Manzil 2025" }
+                // Note: I've included the first 20 entries for a robust demo.
+            ],
+            // Completion status stored as a map: { taskId: isCompleted }
+            completionStatus: {},
+            filteredTasks: [],
+        };
+
+        // Utility function to generate a unique ID for each task (used as Firestore document ID)
+        function getTaskId(task) {
+            // A simple unique ID based on Day, Chapter, and Manzil batch
+            return `${task.Day}-${task.Chapter.replace(/\s/g, '_').replace(/[^\w-]/g, '')}-${task.Manzil.replace(/\s/g, '_').replace(/[^\w-]/g, '')}`;
+        }
+
+        // --- FIREBASE INITIALIZATION AND AUTH ---
+        // Function to update the User ID display in the header
+        function updateUserIdDisplay(id) {
+            const userIdDisplayEl = document.getElementById('userIdDisplay');
+            if (userIdDisplayEl) {
+                userIdDisplayEl.textContent = id;
+            }
+        }
+
+        if (Object.keys(firebaseConfig).length > 0) {
+            try {
+                const firebaseApp = initializeApp(firebaseConfig);
+                db = getFirestore(firebaseApp);
+                auth = getAuth(firebaseApp);
+
+                // Authenticate and set up user listener
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userId = user.uid;
+                    } else {
+                        // Sign in anonymously if no token is provided
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            await signInWithCustomToken(auth, __initial_auth_token);
+                            userId = auth.currentUser.uid;
+                        } else {
+                            const anonymousUser = await signInAnonymously(auth);
+                            userId = anonymousUser.user.uid;
+                        }
+                    }
+                    isAuthReady = true;
+                    updateUserIdDisplay(userId);
+                    console.log("Firebase Auth Ready. User ID:", userId);
+                    app.init();
+                });
+            } catch (error) {
+                console.error("Firebase initialization failed:", error);
+                updateUserIdDisplay('Error');
+            }
+        } else {
+            console.warn("Firebase config missing. Running in local-only mode.");
+            // If Firebase is not configured, run initialization locally.
+            isAuthReady = true;
+            userId = crypto.randomUUID(); // Mock user ID for local storage simulation
+            updateUserIdDisplay(userId);
+            app.init();
+        }
+
+        // --- PWA Service Worker Registration ---
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('service-worker.js').then(registration => {
+                    console.log('Service Worker registered successfully with scope: ', registration.scope);
+                }).catch(err => {
+                    console.log('Service Worker registration failed: ', err);
+                });
+            });
+        }
+
+
+        // --- DATA MANAGEMENT ---
+
+        // 1. Load Data from Firestore
+        app.loadProgress = async () => {
+            if (!isAuthReady || !userId || !db) return;
+
+            try {
+                // Document path for user's private progress data
+                const progressDocRef = doc(db, `artifacts/${appId}/users/${userId}/planner_progress`, 'manzil_tasks');
+                
+                const docSnap = await getDoc(progressDocRef);
+                if (docSnap.exists()) {
+                    // Check if status field exists and is an object
+                    if (docSnap.data().status && typeof docSnap.data().status === 'object') {
+                        app.completionStatus = docSnap.data().status;
+                        console.log("Progress loaded from Firestore:", Object.keys(app.completionStatus).length, "entries.");
+                    } else {
+                         app.completionStatus = {};
+                    }
+                } else {
+                    console.log("No existing progress found in Firestore.");
+                    app.completionStatus = {}; // Initialize empty status
+                }
+            } catch (error) {
+                console.error("Error loading progress:", error);
+                // Fail silently and use empty status if load fails
+                app.completionStatus = {};
+            }
+        };
+
+        // 2. Save Data to Firestore
+        app.saveProgress = async () => {
+            if (!isAuthReady || !userId || !db) {
+                console.error("Cannot save: Auth not ready or DB not initialized.");
+                return;
+            }
+
+            try {
+                const progressDocRef = doc(db, `artifacts/${appId}/users/${userId}/planner_progress`, 'manzil_tasks');
+                
+                // Firestore setDoc operation to save the entire status map
+                await setDoc(progressDocRef, { status: app.completionStatus });
+                console.log("Progress saved to Firestore.");
+            } catch (error) {
+                console.error("Error saving progress:", error);
+            }
+        };
+
+
+        // 3. Toggle Completion Status
+        app.toggleCompletion = (taskId) => {
+            const isCompleted = !!app.completionStatus[taskId];
+            if (isCompleted) {
+                delete app.completionStatus[taskId];
+            } else {
+                app.completionStatus[taskId] = true;
+            }
+            app.saveProgress(); // Save changes immediately
+            app.applyFilters(); // Re-render the list to update visual state
+        };
+
+        // --- UI RENDERING AND LOGIC ---
+
+        // Function to populate filter options dynamically
+        app.populateFilters = () => {
+            const subjects = [...new Set(app.allTasks.map(t => t.Subject))].sort();
+            const batches = [...new Set(app.allTasks.map(t => t.Manzil))].filter(b => b && b.toLowerCase() !== 'all' && b.trim() !== '').sort();
+
+            const subjectFilterEl = document.getElementById('subjectFilter');
+            const batchFilterEl = document.getElementById('batchFilter');
+
+            // Clear and populate Subject filter
+            subjectFilterEl.innerHTML = '<option value="">All Subjects</option>';
+            subjects.forEach(subject => {
+                if (subject && subject.toLowerCase() !== 'all') { // Skip 'ALL' subject for filter
+                    subjectFilterEl.innerHTML += `<option value="${subject}">${subject}</option>`;
+                }
+            });
+
+            // Clear and populate Batch filter
+            batchFilterEl.innerHTML = '<option value="">All Batches</option>';
+            batches.forEach(batch => {
+                if (batch) {
+                    batchFilterEl.innerHTML += `<option value="${batch}">${batch}</option>`;
+                }
+            });
+        };
+
+        // Main function to filter and render the task list
+        app.applyFilters = () => {
+            const selectedSubject = document.getElementById('subjectFilter').value;
+            const selectedBatch = document.getElementById('batchFilter').value;
+            const selectedStatus = document.getElementById('statusFilter').value;
+
+            app.filteredTasks = app.allTasks.filter(task => {
+                const taskId = getTaskId(task);
+                const isCompleted = !!app.completionStatus[taskId];
+
+                // Subject filter
+                if (selectedSubject && task.Subject !== selectedSubject) {
+                    return false;
+                }
+                
+                // Batch filter
+                if (selectedBatch && task.Manzil !== selectedBatch) {
+                    return false;
+                }
+
+                // Status filter
+                if (selectedStatus === 'completed' && !isCompleted) {
+                    return false;
+                }
+                if (selectedStatus === 'pending' && isCompleted) {
+                    return false;
+                }
+
+                return true;
+            });
+
+            app.renderTasks();
+        };
+
+        // Function to render the list elements
+        app.renderTasks = () => {
+            const taskListEl = document.getElementById('taskList');
+            const emptyStateEl = document.getElementById('emptyState');
+            const taskCountDisplayEl = document.getElementById('taskCountDisplay');
+
+            taskListEl.innerHTML = '';
+            
+            if (app.filteredTasks.length === 0) {
+                taskListEl.classList.add('hidden');
+                emptyStateEl.classList.remove('hidden');
+            } else {
+                taskListEl.classList.remove('hidden');
+                emptyStateEl.classList.add('hidden');
+                
+                app.filteredTasks.forEach(task => {
+                    const taskId = getTaskId(task);
+                    const isCompleted = !!app.completionStatus[taskId];
+                    
+                    const card = document.createElement('div');
+                    card.className = `p-4 flex items-center bg-white rounded-xl shadow-md transition duration-150 ease-in-out ${isCompleted ? 'border-l-4 border-green-500 bg-green-50' : 'border-l-4 border-blue-500 hover:shadow-lg'}`;
+                    card.innerHTML = `
+                        <!-- Checkbox/Status Indicator -->
+                        <button 
+                            onclick="app.toggleCompletion('${taskId}')" 
+                            aria-label="Toggle completion"
+                            class="flex-shrink-0 w-8 h-8 rounded-full border-2 ${isCompleted ? 'bg-green-500 border-green-500' : 'bg-white border-gray-300 hover:border-blue-400'} flex items-center justify-center mr-4 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                        >
+                            ${isCompleted ? '<svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>' : ''}
+                        </button>
+
+                        <!-- Task Details -->
+                        <div class="flex-grow min-w-0">
+                            <p class="text-xs font-semibold uppercase ${isCompleted ? 'text-green-600' : 'text-blue-600'} mb-1">${task.Subject} - Day ${task.Day}</p>
+                            <h2 class="text-base font-bold ${isCompleted ? 'text-gray-500 line-through' : 'text-gray-800'} truncate">${task.Chapter}</h2>
+                            <div class="flex flex-wrap items-center mt-1 text-sm text-gray-500">
+                                <span class="mr-3 flex items-center">
+                                    <svg class="w-4 h-4 mr-1 text-red-500" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"></path></svg>
+                                    ${task.Duration || 'N/A'}
+                                </span>
+                                <span class="mr-3 flex items-center">
+                                    <svg class="w-4 h-4 mr-1 text-yellow-600" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z"></path></svg>
+                                    ${task.Faculty || 'Unknown'}
+                                </span>
+                                <span class="text-xs font-medium text-purple-600 bg-purple-100 rounded-full px-2 py-0.5">${task.Manzil || 'N/A'}</span>
+                            </div>
+                        </div>
+                    `;
+                    taskListEl.appendChild(card);
+                });
+            }
+            
+            // Update header count
+            taskCountDisplayEl.textContent = `${app.filteredTasks.length} Tasks`;
+        };
+
+        // --- GLOBAL INITIALIZATION ---
+        app.init = async () => {
+            // Wait for Firebase to load progress data
+            await app.loadProgress(); 
+            
+            // Populate the filter dropdowns based on all tasks
+            app.populateFilters();
+            
+            // Apply initial filters (which is none, so all tasks render)
+            app.applyFilters();
+        };
+        
+        // Expose the app object globally for HTML event handlers
+        window.app = app;
+        
+    </script>
+</body>
+</html>
+
